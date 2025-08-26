@@ -43,7 +43,7 @@ mv ./data_process/dino_extractor.py ./dinov2/
 cd dinov2
 torchrun --nproc_per_node=8 dino_extractor.py
 ```
-If you want to finetune our model, ```python dino_extractor.py``` is must to run.
+If you want to finetune our model, ```dino_extractor.py``` is must to run.
 
 ### Optional
 
