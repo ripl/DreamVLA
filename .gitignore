@@ -189,3 +189,4 @@ ads-cli
 trace.json
 Seer/*
 Depth_Anything_V2
+# *.sh
