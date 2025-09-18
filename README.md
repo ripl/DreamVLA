@@ -11,7 +11,7 @@ DreamVLA: Vision-Language-Action Models Dream Comprehensive World Knowledge -->
   </a>
 </h3>
 <p align="center">
-  NeurIPS 2025 
+ ** NeurIPS 2025 **
 </p>
 <p align="center">
   ⭐ If our project helps you, please give us a star on GitHub to support us!
