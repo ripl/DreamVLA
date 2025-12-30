@@ -71,7 +71,6 @@ def main():
         dit_type = args.dit_type
         
     )
-    calvin_dataset = get_calvin_dataset(args, model.image_processor, clip, epoch=0)
     random_seed(args.seed, args.rank)
     print(f"Start running training on rank {args.rank}.")
     if args.rank == 0 and args.report_to_wandb:

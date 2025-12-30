@@ -1,4 +1,5 @@
 from collections import defaultdict, namedtuple
+import csv
 import logging
 import os, json, random
 from pathlib import Path
@@ -146,7 +147,7 @@ class ModelWrapper(CalvinBaseModel):
                 
         return action
 
-def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, debug=False, create_plan_tsne=False, reset=False, diverse_inst=False):
+def evaluate_policy_ddp(args, model, env, epoch, calvin_conf_path, eval_log_dir=None, debug=False, create_plan_tsne=False, reset=False, diverse_inst=False):
     """
     Run this function to evaluate a model on the CALVIN challenge.
 
@@ -175,22 +176,44 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
     eval_log_dir = get_log_dir(eval_log_dir)
     with open('./utils/eval_sequences.json', 'r') as f:
         eval_sequences = json.load(f)
-    device_num = int(torch.distributed.get_world_size())
-    device_id = torch.distributed.get_rank()
-    assert NUM_SEQUENCES % device_num == 0
-    interval_len = int(NUM_SEQUENCES // device_num)
-    eval_sequences = eval_sequences[device_id*interval_len:min((device_id+1)*interval_len, NUM_SEQUENCES)]
+    dist_world_size = int(torch.distributed.get_world_size())
+    dist_rank = int(torch.distributed.get_rank())
+    assert 0 <= args.eval_shard_id < args.eval_num_shards
+    global_num_shards = dist_world_size * args.eval_num_shards
+    global_shard_id = dist_rank * args.eval_num_shards + args.eval_shard_id
+
+    total_sequences = len(eval_sequences)
+    start = (total_sequences * global_shard_id) // global_num_shards
+    end = (total_sequences * (global_shard_id + 1)) // global_num_shards
+    eval_sequences = eval_sequences[start:end]
     results = []
     plans = defaultdict(list)
     local_sequence_i = 0
-    base_sequence_i = device_id * interval_len
+    base_sequence_i = start
+
+    csv_path = Path(eval_log_dir) / f"episode_metrics_rank{global_shard_id}.csv"
+    episodes_done = 0
+    episodes_success = 0
+    csv_f = open(csv_path, "w", newline="")
+    csv_writer = csv.writer(csv_f)
+    csv_writer.writerow(["episode_idx", "success", "tasks_in_a_row", "success_rate_so_far", "episode_time_sec"])
+    csv_f.flush()
 
     if not debug:
         eval_sequences = tqdm(eval_sequences, position=0, leave=True)
 
     for initial_state, eval_sequence in eval_sequences:
+        episode_idx = base_sequence_i + local_sequence_i
+        t0 = time.time()
         result = evaluate_sequence(env, model, task_oracle, initial_state, eval_sequence, val_annotations, plans, debug, eval_log_dir, base_sequence_i+local_sequence_i, reset=reset, diverse_inst=diverse_inst)
+        dt = time.time() - t0
         results.append(result)
+        episodes_done += 1
+        is_success = int(result == len(eval_sequence))
+        episodes_success += is_success
+        success_rate_so_far = episodes_success / episodes_done
+        csv_writer.writerow([episode_idx, "success" if is_success else "failure", result, success_rate_so_far, dt])
+        csv_f.flush()
         eval_sequences.set_description(
             " ".join([f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(count_success(results))]) + "|"
         )
@@ -209,15 +232,18 @@ def evaluate_policy_ddp(model, env, epoch, calvin_conf_path, eval_log_dir=None, 
 
     eval_sequences = extract_iter_from_tqdm(eval_sequences)
 
-    res_tup = [(res, eval_seq) for res, eval_seq in zip(results, eval_sequences)]
-    all_res_tup = [copy.deepcopy(res_tup) for _ in range(device_num)] if torch.distributed.get_rank() == 0 else None
-    torch.distributed.gather_object(res_tup, all_res_tup, dst=0)
+    if args.eval_num_shards == 1:
+        res_tup = [(res, eval_seq) for res, eval_seq in zip(results, eval_sequences)]
+        all_res_tup = [copy.deepcopy(res_tup) for _ in range(dist_world_size)] if torch.distributed.get_rank() == 0 else None
+        torch.distributed.gather_object(res_tup, all_res_tup, dst=0)
 
-    if torch.distributed.get_rank() == 0:
-        res_tup_list = merge_multi_list(all_res_tup)
-        res_list = [_[0] for _ in res_tup_list]
-        eval_seq_list = [_[1] for _ in res_tup_list]
-        print_and_save(res_list, eval_seq_list, eval_log_dir, epoch)
+        if torch.distributed.get_rank() == 0:
+            res_tup_list = merge_multi_list(all_res_tup)
+            res_list = [_[0] for _ in res_tup_list]
+            eval_seq_list = [_[1] for _ in res_tup_list]
+            print_and_save(res_list, eval_seq_list, eval_log_dir, epoch)
+
+    csv_f.close()
 
     return results
 
@@ -307,4 +333,4 @@ def eval_one_epoch_calvin_ddp(args, model, dataset_path, image_processor, tokeni
                         history_len=hist_len, 
                         calvin_eval_max_steps=EP_LEN,
                         action_pred_steps = args.action_pred_steps)
-    evaluate_policy_ddp(wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)
+    evaluate_policy_ddp(args, wrapped_model, env, 0, args.calvin_conf_path, eval_log_dir=eval_log_dir, debug=debug, reset=reset, diverse_inst=diverse_inst)

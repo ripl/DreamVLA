@@ -113,6 +113,19 @@ def get_parser(is_eval=False):
         action="store_true",
         help="Don't set device index from local rank (when CUDA_VISIBLE_DEVICES restricted to one per proc).",
     )
+    # eval sharding (for running multiple independent jobs)
+    parser.add_argument(
+        "--eval_num_shards",
+        type=int,
+        default=1,
+        help="Total number of eval shards (use >1 to split evaluation across multiple independent jobs).",
+    )
+    parser.add_argument(
+        "--eval_shard_id",
+        type=int,
+        default=0,
+        help="Which eval shard to run in [0, eval_num_shards).",
+    )
     # wandb args
     parser.add_argument("--report_to_wandb", default=False, action="store_true")
     parser.add_argument(
